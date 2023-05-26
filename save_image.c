@@ -13,6 +13,7 @@
 #include <glob.h>
 #include <pwd.h>
 #include "trim.c"
+#include <iconv.h>
 
 struct Text {
 	gchar value[256];
@@ -48,7 +49,7 @@ char **get_filenames(const gchar *input_dir);
 void get_text(gint page_number, gchar *text_file, struct Texts *texts);
 gint is_page(gchar *text, gint page_number);
 gint is_space(gchar *text);
-const gchar *get_biggest_word(const gchar *text);
+gint get_biggest_word(const gchar *text);
 void get_setting();
 void get_style();
 void slice(const gchar * str, gchar * buffer, size_t start, size_t end);
@@ -135,7 +136,7 @@ static void run (
 	strcat(homedir, "/.gimp_setting_type_tool");
 
 	gimp_debug_timer_start();
-    g_printerr("Started\n");
+	g_printerr("Started\n");
 
 	gchar *input_dir = param[0].data.d_string;
 	gchar *output_dir = param[1].data.d_string;
@@ -172,121 +173,119 @@ static void run (
 	        	g_printerr("Error: No number found in filename\n");
 	        	gimp_quit();
 	        }
-	    } else {
-	    	g_printerr("Error: No '/' found in path\n");
-	    	gimp_quit();
+	      } else {
+	      	g_printerr("Error: No '/' found in path\n");
+	      	gimp_quit();
+	      }
+
+	      get_text(page_number, text_file, &texts);
+
+	      for (int i = 0; i < texts.length; ++i) {
+	      	gchar *text_trim, *text_splited;
+	      	gchar current_text[256];
+	      	strcpy(current_text, "");
+
+	      	gint width = get_biggest_word(texts.text[i].value);
+
+	      	struct Font current_font = {
+	      		"",
+	      		"",
+	      		1,
+	      	};
+
+	      	strcpy(current_font.fontname, setting.default_fontname);
+
+	      	text_trim = trim(texts.text[i].value);
+	      	text_splited = strtok(text_trim, delim);
+
+	      	while (text_splited != NULL) {
+	      		int is_tag = FALSE;
+	      		if (only_tag(text_splited)) {
+	      			for (int i = 0; i < fonts.length; ++i) {
+	      				if (strcmp(fonts.fonts[i].tag, text_splited) == 0) {
+	      					if (strcmp(fonts.fonts[i].fontname, "Black") == 0) {
+	      						current_font.black = 1;
+	      					} else if (strcmp(fonts.fonts[i].fontname, "White") == 0) {
+	      						current_font.black = 0;
+	      					} else {
+	      						strcpy(current_font.fontname, fonts.fonts[i].fontname);
+	      					}
+	      					is_tag = TRUE;
+	      					break;
+	      				}
+	      			}
+	      			if (is_tag) {
+	      				text_splited = strtok(NULL, delim);
+	      				continue;
+	      			}
+	      		}
+	      		strcat(current_text, text_splited);
+
+	      		text_splited = strtok(NULL, delim);
+	      		if (text_splited != NULL) {
+	      			strcat(current_text, " ");
+	      		}
+	      	}
+
+	      	text_layer = gimp_text_fontname(image, -1, position[0], position[1], current_text, 0, TRUE, setting.font_size, GIMP_PIXELS, current_font.fontname);
+
+	      	position[0] += width;
+
+	      	if (position[0] > width_image) {
+	      		position[0] = 0;
+	      		position[1] += 310;
+	      	}
+
+	      	gimp_text_layer_set_justification(text_layer, GIMP_TEXT_JUSTIFY_CENTER);
+	      	gimp_text_layer_resize(text_layer, width + 25, 300);
+	      	if (current_font.black) {
+	      		GimpRGB color = { 0, 0, 0, 1 };
+	      		gimp_text_layer_set_color(text_layer, &color);
+	      	} else {
+	      		GimpRGB color = { 255, 255, 255, 1 };
+	      		gimp_text_layer_set_color(text_layer, &color);
+	      	}
+	      }
+
+	      gint32 drawable = gimp_image_get_active_drawable(image);
+
+	      gchar *xcf_filename = g_strdup_printf("%s/%d.xcf", output_dir, page_number);
+
+	      gimp_file_save(GIMP_RUN_NONINTERACTIVE, image, drawable, xcf_filename, xcf_filename);
+	      gimp_image_delete(image);
+
+	      filenames++;
 	    }
 
-	    get_text(page_number, text_file, &texts);
+	    gimp_debug_timer_end();
+	    g_printerr("Finished\n");
+	  }
 
-	    for (int i = 0; i < texts.length; ++i) {
-	    	gchar *text_trim, *text_splited;
-	    	gchar current_text[256];
-			strcpy(current_text, "");
-	    	const gchar *biggest_word = get_biggest_word(texts.text[i].value);
-	    	struct Font current_font = {
-				"",
-				"",
-				1,
-			};
-			strcpy(current_font.fontname, setting.default_fontname);
+	  char **get_filenames(const char *input_dir) {
+	  	char **files;
+	  	glob_t gstruct;
+	  	int r;
 
-	    	gint width, height, ascent, descent;
-	    	gimp_text_get_extents_fontname(biggest_word, setting.font_size, GIMP_PIXELS, current_font.fontname, &width, &height, &ascent, &descent);
-
-	    	text_trim = trim(texts.text[i].value);
-	    	text_splited = strtok(text_trim, delim);
-
-	    	while (text_splited != NULL) {
-	    		int is_tag = FALSE;
-	    		if (only_tag(text_splited)) {
-	    			for (int i = 0; i < fonts.length; ++i) {
-	    				if (strcmp(fonts.fonts[i].tag, text_splited) == 0) {
-	    					if (strcmp(fonts.fonts[i].fontname, "Black") == 0) {
-	    						current_font.black = 1;
-	    					} else if (strcmp(fonts.fonts[i].fontname, "White") == 0) {
-	    						current_font.black = 0;
-	    					} else {
-	    						strcpy(current_font.fontname, fonts.fonts[i].fontname);
-	    					}
-	    					is_tag = TRUE;
-	    					break;
-	    				}
-	    			}
-	    			if (is_tag) {
-	    				text_splited = strtok(NULL, delim);
-	    				continue;
-	    			}
-	    		}
-	    		strcat(current_text, text_splited);
-
-	    		text_splited = strtok(NULL, delim);
-	    		if (text_splited != NULL) {
-	    			strcat(current_text, " ");
-	    		}
-	    	}
-
-		    // printf("%s\n", current_text);
-
-	    	text_layer = gimp_text_fontname(image, -1, position[0], position[1], current_text, 0, TRUE, setting.font_size, GIMP_PIXELS, current_font.fontname);
-
-	    	position[0] += width;
-
-	    	if (width >= width_image) {
-	    		position[0] = 0;
-	    		position[1] += 310;
-	    	}
-
-	    	gimp_text_layer_set_justification(text_layer, GIMP_TEXT_JUSTIFY_CENTER);
-	    	gimp_text_layer_resize(text_layer, width + 25, 300);
-	    	if (current_font.black) {
-	    		GimpRGB color = { 0, 0, 0, 1 };
-	    		gimp_text_layer_set_color(text_layer, &color);
-	    	} else {
-	    		GimpRGB color = { 255, 255, 255, 1 };
-	    		gimp_text_layer_set_color(text_layer, &color);
-	    	}
-	    }
-
-	    gint32 drawable = gimp_image_get_active_drawable(image);
-
-	    gchar *xcf_filename = g_strdup_printf("%s/%d.xcf", output_dir, page_number);
-
-	    gimp_file_save(GIMP_RUN_NONINTERACTIVE, image, drawable, xcf_filename, xcf_filename);
-	    gimp_image_delete(image);
-
-	    filenames++;
-	}
-
-	gimp_debug_timer_end();
-	g_printerr("Finished\n");
-}
-
-char **get_filenames(const char *input_dir) {
-	char **files;
-	glob_t gstruct;
-	int r;
-
-	r = glob(input_dir, GLOB_ERR , NULL, &gstruct);
+	  	r = glob(input_dir, GLOB_ERR , NULL, &gstruct);
     /* check for errors */
-	if( r!=0 ) {
-		char error[100];
-		if( r==GLOB_NOMATCH )
-			snprintf(error, sizeof error, "No matches - %s (%d)", __FILE__ ,__LINE__);
-		else
-			snprintf(error, sizeof error, "Some kinda glob error - %s (%d)", __FILE__ ,__LINE__);
+	  	if( r!=0 ) {
+	  		char error[100];
+	  		if( r==GLOB_NOMATCH )
+	  			snprintf(error, sizeof error, "No matches - %s (%d)", __FILE__ ,__LINE__);
+	  		else
+	  			snprintf(error, sizeof error, "Some kinda glob error - %s (%d)", __FILE__ ,__LINE__);
 
-        gimp_quit();
-	}
+	  		gimp_quit();
+	  	}
 
-	files = gstruct.gl_pathv;
+	  	files = gstruct.gl_pathv;
 
-	return files;
-}
+	  	return files;
+	  }
 
-void get_text(gint page_number, gchar *text_file, struct Texts *texts) {
-	FILE* file_ptr;
-	static gchar str[256];
+	  void get_text(gint page_number, gchar *text_file, struct Texts *texts) {
+	  	FILE* file_ptr;
+	  	static gchar str[256];
 	gint status = FALSE; // status for get text
 	file_ptr = fopen(text_file, "r");
 
@@ -350,24 +349,33 @@ gint is_space(gchar *text) {
 	return FALSE;
 }
 
-const gchar *get_biggest_word(const gchar *text) {
-	gint size = strlen(text);
-	gint i, len = -1, max = -1;
-	static gchar longestWord[50];
+gint get_biggest_word(const gchar *text) {
+	const char *biggest_word = NULL;
+	size_t biggest_word_len = 0;
 
-	for(i = 0; i <= size; i++) {
-		if(text[i] == ' ' || text[i] == '\0') {
-			if(len > max) {
-				max = len;
-				strncpy(longestWord, &text[i - len], len);
+	const char *word_start = text;
+	for (const char *p = text; ; p++) {
+		if (!*p || isspace(*p)) {
+			size_t word_len = p - word_start;
+			if (word_len > biggest_word_len) {
+				biggest_word = word_start;
+				biggest_word_len = word_len;
 			}
-			len = 0;
-		} else {
-			len++;
+			if (!*p) break;
+			word_start = p + 1;
 		}
 	}
 
-	return longestWord;
+	char *result = malloc(biggest_word_len + 1);
+	memcpy(result, biggest_word, biggest_word_len);
+	result[biggest_word_len] = '\0';
+
+	gint width, height, ascent, descent;
+	gimp_text_get_extents_fontname(result, setting.font_size, GIMP_PIXELS, setting.default_fontname, &width, &height, &ascent, &descent);
+
+	free(result);
+
+	return width;
 }
 
 void get_setting() {
